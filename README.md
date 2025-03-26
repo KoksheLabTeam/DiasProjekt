@@ -1,111 +1,195 @@
+import asyncio
+import logging
+import sqlite3
+import openai
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-import sqlite3
-import logging
+from aiogram.types import BotCommand, BotCommandScopeDefault, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.markdown import hbold
 
-API_TOKEN = '8175344328:AAE8nrjoDGDHARUmrXBuhfEP0jQOBNYO1Hg'
-DATABASE_NAME = 'taxi_orders.db'
-
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
-
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Токен вашего бота
+TOKEN_BOT = "8175344328:AAE8nrjoDGDHARUmrXBuhfEP0jQOBNYO1Hg"
 
-def init_db():
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_name TEXT,
-            phone_number TEXT,
-            from_city TEXT,
-            to_city TEXT,
-            status TEXT DEFAULT 'pending'
+# ID администратора
+ADMIN_ID = 814779912
+
+# Инициализация бота и диспетчера
+bot = Bot(token=TOKEN_BOT)
+dp = Dispatcher()
+
+# Подключение к базе данных SQLite
+conn = sqlite3.connect('my_database.db')
+cursor = conn.cursor()
+
+# Создание таблицы users, если она не существует
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER UNIQUE,
+        first_name TEXT,
+        last_name TEXT,
+        username TEXT
+    )
+''')
+conn.commit()
+
+# Настройка OpenAI
+openai.api_key = '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'  # Укажите ваш API-ключ OpenAI
+
+# Команды бота
+async def set_commands(bot: Bot):
+    commands = [
+        BotCommand(command="start", description="Начало работы"),
+        BotCommand(command="help", description="Помощь"),
+        BotCommand(command="cancel", description="Сбросить"),
+        BotCommand(command="lesson", description="Получить урок"),
+        BotCommand(command="quiz", description="Пройти тест"),
+        BotCommand(command="project", description="Идеи для проектов"),
+        BotCommand(command="export", description="Выгрузить данные"),
+        BotCommand(command="ask", description="Задать вопрос по Python"),
+    ]
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+
+# Создаем клавиатуру
+buttons = [
+    KeyboardButton(text='/start'),
+    KeyboardButton(text='/help'),
+    KeyboardButton(text='/lesson'),
+    KeyboardButton(text='/quiz'),
+    KeyboardButton(text='/project'),
+    KeyboardButton(text='/cancel'),
+    KeyboardButton(text='/export'),
+    KeyboardButton(text='/ask'),
+]
+kb = ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True)
+
+# Обработчик команды /start
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user = cursor.fetchone()
+
+    if user is None:
+        cursor.execute("INSERT INTO users (user_id, first_name, last_name, username) VALUES (?, ?, ?, ?)",
+                       (user_id, message.from_user.first_name, message.from_user.last_name, message.from_user.username))
+        conn.commit()
+        await message.answer(f"Приветствую, {hbold(message.from_user.first_name)}! \n"
+                             "Вы успешно зарегистрированы!", reply_markup=kb)
+    else:
+        await message.answer(f"Приветствую, {hbold(message.from_user.first_name)}! \n"
+                             "Рад видеть вас снова!", reply_markup=kb)
+
+    await message.answer(
+        "Я — бот для изучения Python. Вот что я умею:\n"
+        "/start - Начать работу\n"
+        "/help - Получить помощь\n"
+        "/lesson - Получить урок\n"
+        "/quiz - Пройти тест\n"
+        "/project - Идеи для проектов\n"
+        "/cancel - Сбросить текущее действие\n"
+        "/ask - Задать вопрос по Python"
+    )
+
+# Обработчик команды /help
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer(
+        "Список доступных команд:\n"
+        "/start - Начать работу\n"
+        "/help - Получить помощь\n"
+        "/lesson - Получить урок\n"
+        "/quiz - Пройти тест\n"
+        "/project - Идеи для проектов\n"
+        "/cancel - Сбросить текущее действие\n"
+        "/export - Выгрузить данные (только для администратора)\n"
+        "/ask - Задать вопрос по Python"
+    )
+
+# Обработчик команды /cancel
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message):
+    await message.answer("Текущее действие сброшено.", reply_markup=kb)
+
+# Обработчик команды /lesson
+@dp.message(Command("lesson"))
+async def cmd_lesson(message: types.Message):
+    await message.answer("Вот ваш урок: [https://metanit.com/python/tutorial/]")
+
+# Обработчик команды /quiz
+@dp.message(Command("quiz"))
+async def cmd_quiz(message: types.Message):
+    await message.answer("Вот ваш тест: [https://docs.google.com/document/d/1Y1YU1lFDPkYeXshVAESStlRW5AvXb_VpMDRGWSXDR0o/edit?usp=sharing]")
+
+# Обработчик команды /project
+@dp.message(Command("project"))
+async def cmd_project(message: types.Message):
+    await message.answer("Вот идеи для проектов: [идеи]")
+
+# Обработчик команды /export (только для администратора)
+@dp.message(Command("export"))
+async def cmd_export(message: types.Message):
+    if message.from_user.id == ADMIN_ID:  # Проверяем ID пользователя
+        try:
+            cursor.execute("SELECT * FROM users")
+            users = cursor.fetchall()
+
+            if users:
+                with open("users_data.txt", "w") as file:
+                    for user in users:
+                        file.write(f"ID: {user[0]}, User ID: {user[1]}, Имя: {user[2]}, Фамилия: {user[3]}, Username: {user[4]}\n")
+                await message.answer_document(types.FSInputFile("users_data.txt"))
+            else:
+                await message.answer("В базе данных нет пользователей.")
+
+        except Exception as e:
+            logger.error(f"Ошибка при выгрузке данных: {e}")
+            await message.answer("Произошла ошибка при выгрузке данных.")
+    else:
+        await message.answer("У вас нет прав администратора для выполнения этой команды.")
+
+# Обработчик команды /ask (вопросы к OpenAI)
+@dp.message(Command("ask"))
+async def cmd_ask(message: types.Message):
+    await message.answer("Напишите ваш вопрос по Python, и я постараюсь на него ответить.")
+
+# Обработчик текстовых сообщений (для вопросов к OpenAI)
+@dp.message()
+async def handle_message(message: types.Message):
+    if message.text.startswith("/"):
+        return  # Игнорируем команды
+
+    # Отправляем вопрос в OpenAI
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # Используем актуальную модель
+            messages=[
+                {"role": "system", "content": "Ты помощник, который отвечает на вопросы по Python."},
+                {"role": "user", "content": f"Ответь на вопрос по Python: {message.text}"}
+            ],
+            max_tokens=500,  # Максимальное количество токенов в ответе
+            temperature=0.7,  # Уровень креативности
         )
-    ''')
-    conn.commit()
-    conn.close()
+        answer = response.choices[0].message['content'].strip()
+        await message.answer(answer)
+    except Exception as e:
+        logger.error(f"Ошибка при обращении к OpenAI: {e}")
+        await message.answer("Произошла ошибка при обработке вашего вопроса.")
 
+# Запуск бота
+async def main():
+    await set_commands(bot)
+    await dp.start_polling(bot)
 
-def save_order(user_name, phone_number, from_city, to_city):
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO orders (user_name, phone_number, from_city, to_city)
-        VALUES (?, ?, ?, ?)
-    ''', (user_name, phone_number, from_city, to_city))
-    conn.commit()
-    conn.close()
-
-
-def city_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.add(KeyboardButton(text='Омск → Кокшетау'))
-    builder.add(KeyboardButton(text='Кокшетау → Омск'))
-    return builder.as_markup(resize_keyboard=True)
-
-
-class OrderStates(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_phone = State()
-
-
-@dp.message(Command('start'))
-async def send_welcome(message: types.Message):
-    await message.reply("Привет! Я бот для заказа такси между Омском и Кокшетау. Введите /order чтобы начать.")
-
-
-@dp.message(Command('order'))
-async def start_order(message: types.Message, state: FSMContext):
-    await message.reply("Выберите направление:", reply_markup=city_keyboard())
-    await state.set_state(OrderStates.waiting_for_name)
-
-
-@dp.message(OrderStates.waiting_for_name)
-async def process_direction(message: types.Message, state: FSMContext):
-    direction = message.text
-    if direction not in ['Омск → Кокшетау', 'Кокшетау → Омск']:
-        await message.reply("Пожалуйста, выберите направление с помощью кнопок.")
-        return
-
-    await state.update_data(direction=direction)
-    await message.reply("Введите ваше имя:")
-    await state.set_state(OrderStates.waiting_for_phone)
-
-
-@dp.message(OrderStates.waiting_for_phone)
-async def process_name(message: types.Message, state: FSMContext):
-    user_name = message.text
-    await state.update_data(user_name=user_name)
-    await message.reply(f"Приятно познакомиться, {user_name}! Введите ваш номер телефона:")
-
-
-@dp.message(OrderStates.waiting_for_phone)
-async def process_phone(message: types.Message, state: FSMContext):
-    phone_number = message.text
-    user_data = await state.get_data()
-    user_name = user_data['user_name']
-    direction = user_data['direction']
-    from_city, to_city = direction.split(' → ')
-
-    save_order(user_name, phone_number, from_city, to_city)
-
-    await message.reply(
-        f"Спасибо, {user_name}! Ваш заказ на такси {direction} принят. Мы свяжемся с вами по номеру {phone_number}.")
-
-    await state.clear()
-
-
-if __name__ == '_main_':
-    logging.basicConfig(level=logging.INFO)
-
-    init_db()  
-
-    dp.run_polling(bot)
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен.")
+    finally:
+        conn.close()  # Закрываем соединение с базой данных при завершении работы

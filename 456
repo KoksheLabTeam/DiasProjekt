@@ -1,111 +1,114 @@
+import asyncio
+import logging
+import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-import sqlite3
-import logging
+from aiogram.types import BotCommand, BotCommandScopeDefault, ReplyKeyboardMarkup, KeyboardButton
 
-API_TOKEN = '8175344328:AAE8nrjoDGDHARUmrXBuhfEP0jQOBNYO1Hg'
-DATABASE_NAME = 'taxi_orders.db'
-
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
-
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Токен бота
+TOKEN_BOT = "8175344328:AAE8nrjoDGDHARUmrXBuhfEP0jQOBNYO1Hg"
+ADMIN_ID = 814779912
 
-def init_db():
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_name TEXT,
-            phone_number TEXT,
-            from_city TEXT,
-            to_city TEXT,
-            status TEXT DEFAULT 'pending'
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# Инициализация бота и диспетчера
+bot = Bot(token=TOKEN_BOT)
+dp = Dispatcher()
 
+# Подключение к базе данных
+conn = sqlite3.connect('taxi_orders.db')
+cursor = conn.cursor()
 
-def save_order(user_name, phone_number, from_city, to_city):
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO orders (user_name, phone_number, from_city, to_city)
-        VALUES (?, ?, ?, ?)
-    ''', (user_name, phone_number, from_city, to_city))
-    conn.commit()
-    conn.close()
+# Создание таблицы заказов
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER,
+        full_name TEXT,
+        phone TEXT,
+        passengers INTEGER,
+        trip_date TEXT,
+        route TEXT
+    )
+''')
+conn.commit()
 
+# Команды бота
+async def set_commands(bot: Bot):
+    commands = [
+        BotCommand(command="start", description="Начало работы"),
+        BotCommand(command="order_kokshetau_omsk", description="Заказать такси Кокшетау - Омск"),
+        BotCommand(command="order_omsk_kokshetau", description="Заказать такси Омск - Кокшетау"),
+        BotCommand(command="cancel", description="Сбросить заказ"),
+    ]
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
 
-def city_keyboard():
-    builder = ReplyKeyboardBuilder()
-    builder.add(KeyboardButton(text='Омск → Кокшетау'))
-    builder.add(KeyboardButton(text='Кокшетау → Омск'))
-    return builder.as_markup(resize_keyboard=True)
+# Клавиатура
+buttons = [
+    KeyboardButton(text='/order_kokshetau_omsk'),
+    KeyboardButton(text='/order_omsk_kokshetau'),
+    KeyboardButton(text='/cancel'),
+]
+kb = ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True)
 
+# Состояние для хранения заказов
+user_orders = {}
 
-class OrderStates(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_phone = State()
+# Обработчик команды /start
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer("Добро пожаловать в службу заказа такси Кокшетау – Омск / Омск – Кокшетау!\nВыберите маршрут для заказа.", reply_markup=kb)
 
+# Функция для оформления заказа
+async def start_order(message: types.Message, route: str):
+    user_orders[message.from_user.id] = {"route": route}
+    await message.answer("Введите ваше ФИО:")
 
-@dp.message(Command('start'))
-async def send_welcome(message: types.Message):
-    await message.reply("Привет! Я бот для заказа такси между Омском и Кокшетау. Введите /order чтобы начать.")
+@dp.message(Command("order_kokshetau_omsk"))
+async def order_kokshetau_omsk(message: types.Message):
+    await start_order(message, "Кокшетау - Омск")
 
+@dp.message(Command("order_omsk_kokshetau"))
+async def order_omsk_kokshetau(message: types.Message):
+    await start_order(message, "Омск - Кокшетау")
 
-@dp.message(Command('order'))
-async def start_order(message: types.Message, state: FSMContext):
-    await message.reply("Выберите направление:", reply_markup=city_keyboard())
-    await state.set_state(OrderStates.waiting_for_name)
+@dp.message()
+async def process_order(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in user_orders:
+        order = user_orders[user_id]
+        if "full_name" not in order:
+            order["full_name"] = message.text
+            await message.answer("Введите ваш номер телефона:")
+        elif "phone" not in order:
+            order["phone"] = message.text
+            await message.answer("Введите количество пассажиров:")
+        elif "passengers" not in order:
+            if message.text.isdigit():
+                order["passengers"] = int(message.text)
+                await message.answer("Введите дату выезда (в формате ДД.ММ.ГГГГ):")
+            else:
+                await message.answer("Пожалуйста, введите число пассажиров цифрами.")
+        elif "trip_date" not in order:
+            order["trip_date"] = message.text
+            cursor.execute("INSERT INTO orders (user_id, full_name, phone, passengers, trip_date, route) VALUES (?, ?, ?, ?, ?, ?)",
+                           (user_id, order["full_name"], order["phone"], order["passengers"], order["trip_date"], order["route"]))
+            conn.commit()
+            del user_orders[user_id]
+            await message.answer("Ваш заказ принят! Мы свяжемся с вами для подтверждения.")
 
+# Запуск бота
+async def main():
+    await set_commands(bot)
+    await dp.start_polling(bot)
 
-@dp.message(OrderStates.waiting_for_name)
-async def process_direction(message: types.Message, state: FSMContext):
-    direction = message.text
-    if direction not in ['Омск → Кокшетау', 'Кокшетау → Омск']:
-        await message.reply("Пожалуйста, выберите направление с помощью кнопок.")
-        return
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен.")
+    finally:
+        conn.close()
 
-    await state.update_data(direction=direction)
-    await message.reply("Введите ваше имя:")
-    await state.set_state(OrderStates.waiting_for_phone)
-
-
-@dp.message(OrderStates.waiting_for_phone)
-async def process_name(message: types.Message, state: FSMContext):
-    user_name = message.text
-    await state.update_data(user_name=user_name)
-    await message.reply(f"Приятно познакомиться, {user_name}! Введите ваш номер телефона:")
-
-
-@dp.message(OrderStates.waiting_for_phone)
-async def process_phone(message: types.Message, state: FSMContext):
-    phone_number = message.text
-    user_data = await state.get_data()
-    user_name = user_data['user_name']
-    direction = user_data['direction']
-    from_city, to_city = direction.split(' → ')
-
-    save_order(user_name, phone_number, from_city, to_city)
-
-    await message.reply(
-        f"Спасибо, {user_name}! Ваш заказ на такси {direction} принят. Мы свяжемся с вами по номеру {phone_number}.")
-
-    await state.clear()
-
-
-if __name__ == '_main_':
-    logging.basicConfig(level=logging.INFO)
-
-    init_db()  # Инициализация базы данных
-
-    dp.run_polling(bot)
